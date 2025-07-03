@@ -2,39 +2,48 @@ from fastapi import APIRouter, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from typing import Optional
 import uuid
-import os
+
+from app.services.storage import save_audio_locally, get_upload_metadata
+from app.services.anonymizer import transcribe_and_anonymize
+from app.models import UploadResponse
 
 router = APIRouter()
 
-# Ensure a temp folder exists for saving files locally (for now)
-TEMP_DIR = "temp"
-os.makedirs(TEMP_DIR, exist_ok=True)
-
-@router.post("/audio")
+@router.post("/audio", response_model=UploadResponse)
 async def upload_audio(
     audio_file: UploadFile = File(...),
     location_type: Optional[str] = Form(None),
     tags: Optional[str] = Form(None)
 ):
     try:
-        # Create a unique filename
+        # Generate unique filename
         file_id = str(uuid.uuid4())
-        original_filename = audio_file.filename
-        saved_filename = f"{file_id}_{original_filename}"
-        file_path = os.path.join(TEMP_DIR, saved_filename)
+        filename = f"{file_id}_{audio_file.filename}"
 
-        # Save the uploaded audio file temporarily
-        with open(file_path, "wb") as f:
-            f.write(await audio_file.read())
+        # Save audio to temp folder
+        file_path = save_audio_locally(audio_file, filename)
 
-        return JSONResponse({
+        # Transcribe and anonymize
+        transcript_data = transcribe_and_anonymize(file_path)
+
+        # Prepare metadata
+        metadata = get_upload_metadata(
+            file_id=file_id,
+            filename=filename,
+            location_type=location_type,
+            tags=tags
+        )
+
+        # Build full response
+        response = {
+            **metadata,
             "status": "success",
-            "message": "Audio uploaded successfully",
-            "file_id": file_id,
-            "filename": saved_filename,
-            "location_type": location_type,
-            "tags": tags
-        })
+            "message": "Audio uploaded and processed successfully",
+            "transcription": transcript_data["transcription"],
+            "anonymized_transcription": transcript_data["anonymized_transcription"]
+        }
+
+        return JSONResponse(content=response)
 
     except Exception as e:
         return JSONResponse(status_code=500, content={
